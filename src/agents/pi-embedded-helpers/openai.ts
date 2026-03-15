@@ -162,12 +162,14 @@ export function resetOpenAIReplayAnchors(messages: AgentMessage[]): AgentMessage
 
       const localRewrittenIds = new Map<string, string>();
       let assistantChanged = false;
-      const nextContent = assistantMsg.content.map((block, blockIndex) => {
-        if (!block || typeof block !== "object") {
-          return block;
-        }
+      type AssistantContentBlock = (typeof assistantMsg.content)[number];
+      const nextContent: AssistantContentBlock[] = [];
 
-        let nextBlock = block;
+      for (const [blockIndex, block] of assistantMsg.content.entries()) {
+        if (!block || typeof block !== "object") {
+          nextContent.push(block as AssistantContentBlock);
+          continue;
+        }
 
         const thinkingBlock = block as OpenAIThinkingBlock;
         if (
@@ -175,10 +177,10 @@ export function resetOpenAIReplayAnchors(messages: AgentMessage[]): AgentMessage
           parseOpenAIReasoningSignature(thinkingBlock.thinkingSignature)
         ) {
           assistantChanged = true;
-          const rest = { ...(thinkingBlock as unknown as Record<string, unknown>) };
-          delete rest.thinkingSignature;
-          nextBlock = rest as typeof block;
+          continue;
         }
+
+        let nextBlock = block;
 
         const textBlock = nextBlock as OpenAITextBlock;
         if (
@@ -198,26 +200,24 @@ export function resetOpenAIReplayAnchors(messages: AgentMessage[]): AgentMessage
           } else {
             delete rest.textSignature;
           }
-          nextBlock = rest as typeof block;
+          nextBlock = rest as unknown as typeof block;
         }
 
         const toolCallBlock = nextBlock as OpenAIToolCallBlock;
-        if (!isOpenAIToolCallType(toolCallBlock.type) || typeof toolCallBlock.id !== "string") {
-          return nextBlock;
+        if (isOpenAIToolCallType(toolCallBlock.type) && typeof toolCallBlock.id === "string") {
+          const pairing = splitOpenAIFunctionCallPairing(toolCallBlock.id);
+          if (pairing.itemId) {
+            assistantChanged = true;
+            localRewrittenIds.set(toolCallBlock.id, pairing.callId);
+            nextBlock = {
+              ...(nextBlock as unknown as Record<string, unknown>),
+              id: pairing.callId,
+            } as unknown as typeof block;
+          }
         }
 
-        const pairing = splitOpenAIFunctionCallPairing(toolCallBlock.id);
-        if (!pairing.itemId) {
-          return nextBlock;
-        }
-
-        assistantChanged = true;
-        localRewrittenIds.set(toolCallBlock.id, pairing.callId);
-        return {
-          ...(nextBlock as unknown as Record<string, unknown>),
-          id: pairing.callId,
-        } as typeof block;
-      });
+        nextContent.push(nextBlock);
+      }
 
       pendingRewrittenIds = localRewrittenIds.size > 0 ? localRewrittenIds : null;
       if (!assistantChanged) {
@@ -225,6 +225,9 @@ export function resetOpenAIReplayAnchors(messages: AgentMessage[]): AgentMessage
         continue;
       }
       changed = true;
+      if (nextContent.length === 0) {
+        continue;
+      }
       rewrittenMessages.push({ ...assistantMsg, content: nextContent } as AgentMessage);
       continue;
     }

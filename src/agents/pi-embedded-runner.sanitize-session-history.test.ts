@@ -663,13 +663,7 @@ describe("sanitizeSessionHistory", () => {
       sessionManager,
     });
 
-    expect(result).toHaveLength(1);
-    expect(result[0]?.role).toBe("assistant");
-    const assistant = result[0] as {
-      content?: Array<{ type?: string; thinkingSignature?: unknown }>;
-    };
-    expect(assistant.content?.[0]).toMatchObject({ type: "thinking", thinking: "reasoning" });
-    expect(assistant.content?.[0]?.thinkingSignature).toBeUndefined();
+    expect(result).toEqual([]);
   });
 
   it("strips orphaned openai reasoning replay anchors when the model changes too", async () => {
@@ -677,13 +671,7 @@ describe("sanitizeSessionHistory", () => {
       sanitizeSessionHistory,
     });
 
-    expect(result).toHaveLength(1);
-    expect(result[0]?.role).toBe("assistant");
-    const assistant = result[0] as {
-      content?: Array<{ type?: string; thinkingSignature?: unknown }>;
-    };
-    expect(assistant.content?.[0]).toMatchObject({ type: "thinking", thinking: "reasoning" });
-    expect(assistant.content?.[0]?.thinkingSignature).toBeUndefined();
+    expect(result).toEqual([]);
   });
 
   it("drops orphaned toolResult entries when switching from openai history to anthropic", async () => {

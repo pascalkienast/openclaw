@@ -68,9 +68,7 @@ describe("sanitizeSessionHistory OpenAI replay anchor reset", () => {
         thinkingSignature?: string;
       }>;
     };
-    expect(assistant.content?.find((block) => block.type === "thinking")?.thinkingSignature).toBe(
-      undefined,
-    );
+    expect(assistant.content?.some((block) => block.type === "thinking")).toBe(false);
     expect(assistant.content?.find((block) => block.type === "text")?.textSignature).toBe(
       JSON.stringify({ v: 1, id: "msg_reset_0_1", phase: "commentary" }),
     );
