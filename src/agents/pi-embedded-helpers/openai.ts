@@ -131,9 +131,10 @@ function isOpenAIToolCallType(type: unknown): boolean {
 
 /**
  * Historical OpenAI Responses/Codex turns should be replayed as plain transcript,
- * not as resumable backend items. Before a fresh top-level run starts, strip the
- * persisted OpenAI-specific replay anchors (response ids, reasoning signatures,
- * and function_call item ids) while preserving call_id-based tool-result pairing.
+ * not as resumable backend items. Before a fresh top-level run starts, drop
+ * historical OpenAI `thinking` blocks and strip the remaining provider-specific
+ * replay anchors (response ids and function_call item ids) while preserving
+ * call_id-based tool-result pairing.
  *
  * This keeps post-tool continuation state scoped to the live run that created it
  * without destroying the higher-level session id used for WebSocket reuse and
@@ -172,10 +173,7 @@ export function resetOpenAIReplayAnchors(messages: AgentMessage[]): AgentMessage
         }
 
         const thinkingBlock = block as OpenAIThinkingBlock;
-        if (
-          thinkingBlock.type === "thinking" &&
-          parseOpenAIReasoningSignature(thinkingBlock.thinkingSignature)
-        ) {
+        if (thinkingBlock.type === "thinking") {
           assistantChanged = true;
           continue;
         }

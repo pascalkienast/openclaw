@@ -78,6 +78,56 @@ describe("sanitizeSessionHistory OpenAI replay anchor reset", () => {
     expect(toolResult.toolCallId).toBe("call_123");
   });
 
+  it("drops unsigned historical thinking blocks when resetting other replay anchors", async () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal reasoning",
+          },
+          {
+            type: "text",
+            text: "Working on it.",
+            textSignature: JSON.stringify({ v: 1, id: "msg_123", phase: "commentary" }),
+          },
+        ],
+      }),
+    ];
+
+    const result = await sanitize(messages);
+
+    const assistant = result[0] as {
+      content?: Array<{ type?: string; text?: string; textSignature?: string }>;
+    };
+    expect(assistant.content).toEqual([
+      {
+        type: "text",
+        text: "Working on it.",
+        textSignature: JSON.stringify({ v: 1, id: "msg_reset_0_1", phase: "commentary" }),
+      },
+    ]);
+  });
+
+  it("drops unsigned historical thinking-only turns", async () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal reasoning",
+          },
+        ],
+      }),
+    ];
+
+    const result = await sanitize(messages);
+
+    expect(result).toEqual([]);
+  });
+
   it("leaves already-reset OpenAI replay ids untouched", async () => {
     const messages: AgentMessage[] = [
       castAgentMessage({

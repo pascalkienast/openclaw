@@ -100,7 +100,7 @@ external end-user instructions.
 
 - Image sanitization.
 - Reset stored OpenAI replay anchors at fresh top-level turn boundaries:
-  - strip persisted reasoning signatures from historical `thinking` blocks,
+  - drop historical `thinking` blocks entirely (including already-stripped reasoning blocks with no replay value),
   - strip persisted `textSignature` response ids from historical assistant text blocks,
   - downgrade historical `call_id|fc_id` tool ids to plain `call_id` while preserving tool-result pairing.
 - Drop orphaned reasoning signatures (standalone reasoning items without a following content block) for OpenAI Responses/Codex transcripts.

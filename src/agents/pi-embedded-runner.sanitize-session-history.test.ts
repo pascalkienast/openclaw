@@ -541,7 +541,7 @@ describe("sanitizeSessionHistory", () => {
     expect(freshAssistant?.usage).toBeDefined();
   });
 
-  it("keeps reasoning-only assistant messages for openai-responses", async () => {
+  it("drops reasoning-only assistant messages for openai-responses", async () => {
     setNonGoogleModelApi();
 
     const messages: AgentMessage[] = [
@@ -566,8 +566,7 @@ describe("sanitizeSessionHistory", () => {
       sessionId: TEST_SESSION_ID,
     });
 
-    expect(result).toHaveLength(2);
-    expect(result[1]?.role).toBe("assistant");
+    expect(result).toEqual([messages[0]]);
   });
 
   it("synthesizes missing tool results for openai-responses after repair", async () => {
