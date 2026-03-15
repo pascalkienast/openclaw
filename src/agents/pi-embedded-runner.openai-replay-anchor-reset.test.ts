@@ -30,6 +30,7 @@ describe("sanitizeSessionHistory OpenAI replay anchor reset", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "assistant",
+        api: "openai-responses",
         content: [
           {
             type: "thinking",
@@ -78,10 +79,79 @@ describe("sanitizeSessionHistory OpenAI replay anchor reset", () => {
     expect(toolResult.toolCallId).toBe("call_123");
   });
 
+  it("rewrites legacy plain-string textSignature ids instead of deleting them", async () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        api: "openai-responses",
+        content: [
+          {
+            type: "text",
+            text: "First block",
+            textSignature: "msg_legacy_a",
+          },
+          {
+            type: "text",
+            text: "Second block",
+            textSignature: "msg_legacy_b",
+          },
+        ],
+      }),
+    ];
+
+    const result = await sanitize(messages);
+
+    const assistant = result[0] as {
+      content?: Array<{ type?: string; text?: string; textSignature?: string }>;
+    };
+    expect(assistant.content).toEqual([
+      {
+        type: "text",
+        text: "First block",
+        textSignature: JSON.stringify({ v: 1, id: "msg_reset_0_0" }),
+      },
+      {
+        type: "text",
+        text: "Second block",
+        textSignature: JSON.stringify({ v: 1, id: "msg_reset_0_1" }),
+      },
+    ]);
+  });
+
+  it("preserves non-OpenAI thinking blocks for later cross-model conversion", async () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "assistant",
+        api: "anthropic-messages",
+        content: [
+          {
+            type: "thinking",
+            thinking: "foreign reasoning",
+          },
+          {
+            type: "text",
+            text: "Working on it.",
+          },
+        ],
+      }),
+    ];
+
+    const result = await sanitize(messages);
+
+    const assistant = result[0] as {
+      content?: Array<{ type?: string; thinking?: string; text?: string }>;
+    };
+    expect(assistant.content).toEqual([
+      { type: "thinking", thinking: "foreign reasoning" },
+      { type: "text", text: "Working on it." },
+    ]);
+  });
+
   it("drops unsigned historical thinking blocks when resetting other replay anchors", async () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "assistant",
+        api: "openai-responses",
         content: [
           {
             type: "thinking",
@@ -114,6 +184,7 @@ describe("sanitizeSessionHistory OpenAI replay anchor reset", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "assistant",
+        api: "openai-responses",
         content: [
           {
             type: "thinking",
@@ -132,6 +203,7 @@ describe("sanitizeSessionHistory OpenAI replay anchor reset", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "assistant",
+        api: "openai-responses",
         content: [
           {
             type: "text",

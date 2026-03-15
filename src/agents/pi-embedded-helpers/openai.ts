@@ -24,6 +24,7 @@ type OpenAIReasoningSignature = {
 type OpenAITextSignaturePhase = "commentary" | "final_answer";
 
 type OpenAITextSignature = {
+  id: string;
   phase?: OpenAITextSignaturePhase;
 };
 
@@ -72,26 +73,32 @@ function parseOpenAITextSignature(value: unknown): OpenAITextSignature | null {
     return null;
   }
   if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
-    return {};
+    return { id: trimmed };
   }
   try {
-    const candidate = JSON.parse(trimmed) as { phase?: unknown };
+    const candidate = JSON.parse(trimmed) as { v?: unknown; id?: unknown; phase?: unknown };
+    if (candidate.v !== 1 || typeof candidate.id !== "string" || candidate.id.length === 0) {
+      return null;
+    }
     const phase = normalizeOpenAITextSignaturePhase(candidate.phase);
-    return phase ? { phase } : {};
+    return {
+      id: candidate.id,
+      ...(phase ? { phase } : {}),
+    };
   } catch {
-    return {};
+    return null;
   }
 }
 
 function buildResetOpenAITextSignature(params: {
   messageIndex: number;
   blockIndex: number;
-  phase: OpenAITextSignaturePhase;
+  phase?: OpenAITextSignaturePhase;
 }): string {
   return JSON.stringify({
     v: 1,
     id: `msg_reset_${params.messageIndex}_${params.blockIndex}`,
-    phase: params.phase,
+    ...(params.phase ? { phase: params.phase } : {}),
   });
 }
 
@@ -129,6 +136,10 @@ function isOpenAIToolCallType(type: unknown): boolean {
   return type === "toolCall" || type === "toolUse" || type === "functionCall";
 }
 
+function isOpenAIResponsesAssistantApi(value: unknown): boolean {
+  return value === "openai-responses" || value === "openai-codex-responses";
+}
+
 /**
  * Historical OpenAI Responses/Codex turns should be replayed as plain transcript,
  * not as resumable backend items. Before a fresh top-level run starts, drop
@@ -163,6 +174,9 @@ export function resetOpenAIReplayAnchors(messages: AgentMessage[]): AgentMessage
 
       const localRewrittenIds = new Map<string, string>();
       let assistantChanged = false;
+      const dropThinkingBlocks = isOpenAIResponsesAssistantApi(
+        (assistantMsg as { api?: unknown }).api,
+      );
       type AssistantContentBlock = (typeof assistantMsg.content)[number];
       const nextContent: AssistantContentBlock[] = [];
 
@@ -173,7 +187,7 @@ export function resetOpenAIReplayAnchors(messages: AgentMessage[]): AgentMessage
         }
 
         const thinkingBlock = block as OpenAIThinkingBlock;
-        if (thinkingBlock.type === "thinking") {
+        if (thinkingBlock.type === "thinking" && dropThinkingBlocks) {
           assistantChanged = true;
           continue;
         }
@@ -189,11 +203,11 @@ export function resetOpenAIReplayAnchors(messages: AgentMessage[]): AgentMessage
           assistantChanged = true;
           const rest = { ...(textBlock as unknown as Record<string, unknown>) };
           const parsedSignature = parseOpenAITextSignature(textBlock.textSignature);
-          if (parsedSignature?.phase) {
+          if (parsedSignature) {
             rest.textSignature = buildResetOpenAITextSignature({
               messageIndex,
               blockIndex,
-              phase: parsedSignature.phase,
+              ...(parsedSignature.phase ? { phase: parsedSignature.phase } : {}),
             });
           } else {
             delete rest.textSignature;
