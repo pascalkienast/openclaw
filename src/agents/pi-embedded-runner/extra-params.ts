@@ -23,7 +23,6 @@ import {
 } from "./moonshot-stream-wrappers.js";
 import {
   createCodexDefaultTransportWrapper,
-  createOpenAICodexRunScopedSessionWrapper,
   createOpenAIDefaultTransportWrapper,
   createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
@@ -336,7 +335,6 @@ export function applyExtraParamsToAgent(
   extraParamsOverride?: Record<string, unknown>,
   thinkingLevel?: ThinkLevel,
   agentId?: string,
-  runtime?: { turnScopedSessionId?: string },
 ): void {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
@@ -347,15 +345,6 @@ export function applyExtraParamsToAgent(
   if (provider === "openai-codex") {
     // Default Codex to WebSocket-first when nothing else specifies transport.
     agent.streamFn = createCodexDefaultTransportWrapper(agent.streamFn);
-    // Scope Codex backend transport sessions to the current top-level run.
-    // The upstream provider reuses options.sessionId as both `session_id` and
-    // prompt-cache key, which is too coarse when OpenClaw passes a long-lived
-    // channel session id. Per-run scoping keeps tool continuations inside the
-    // current turn instead of letting later turns inherit stale backend state.
-    agent.streamFn = createOpenAICodexRunScopedSessionWrapper(
-      agent.streamFn,
-      runtime?.turnScopedSessionId,
-    );
   } else if (provider === "openai") {
     // Default OpenAI Responses to WebSocket-first with transparent SSE fallback.
     agent.streamFn = createOpenAIDefaultTransportWrapper(agent.streamFn);

@@ -357,20 +357,3 @@ export function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | und
     return underlying(model, context, mergedOptions);
   };
 }
-
-export function createOpenAICodexRunScopedSessionWrapper(
-  baseStreamFn: StreamFn | undefined,
-  runScopedSessionId: string | undefined,
-): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  const scopedSessionId = runScopedSessionId?.trim();
-  return (model, context, options) => {
-    if (!scopedSessionId || model.api !== "openai-codex-responses") {
-      return underlying(model, context, options);
-    }
-    return underlying(model, context, {
-      ...options,
-      sessionId: scopedSessionId,
-    } as SimpleStreamOptions);
-  };
-}

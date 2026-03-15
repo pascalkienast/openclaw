@@ -645,7 +645,7 @@ describe("sanitizeSessionHistory", () => {
     expect(result).toEqual([]);
   });
 
-  it("downgrades orphaned openai reasoning even when the model has not changed", async () => {
+  it("strips orphaned openai reasoning replay anchors even when the model has not changed", async () => {
     const sessionEntries = [
       makeModelSnapshotEntry({
         provider: "openai",
@@ -663,15 +663,27 @@ describe("sanitizeSessionHistory", () => {
       sessionManager,
     });
 
-    expect(result).toEqual([]);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.role).toBe("assistant");
+    const assistant = result[0] as {
+      content?: Array<{ type?: string; thinkingSignature?: unknown }>;
+    };
+    expect(assistant.content?.[0]).toMatchObject({ type: "thinking", thinking: "reasoning" });
+    expect(assistant.content?.[0]?.thinkingSignature).toBeUndefined();
   });
 
-  it("downgrades orphaned openai reasoning when the model changes too", async () => {
+  it("strips orphaned openai reasoning replay anchors when the model changes too", async () => {
     const result = await sanitizeSnapshotChangedOpenAIReasoning({
       sanitizeSessionHistory,
     });
 
-    expect(result).toEqual([]);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.role).toBe("assistant");
+    const assistant = result[0] as {
+      content?: Array<{ type?: string; thinkingSignature?: unknown }>;
+    };
+    expect(assistant.content?.[0]).toMatchObject({ type: "thinking", thinking: "reasoning" });
+    expect(assistant.content?.[0]?.thinkingSignature).toBeUndefined();
   });
 
   it("drops orphaned toolResult entries when switching from openai history to anthropic", async () => {

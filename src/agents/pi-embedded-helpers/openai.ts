@@ -11,9 +11,20 @@ type OpenAIToolCallBlock = {
   id?: unknown;
 };
 
+type OpenAITextBlock = {
+  type?: unknown;
+  textSignature?: unknown;
+};
+
 type OpenAIReasoningSignature = {
   id: string;
   type: string;
+};
+
+type OpenAITextSignaturePhase = "commentary" | "final_answer";
+
+type OpenAITextSignature = {
+  phase?: OpenAITextSignaturePhase;
 };
 
 function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature | null {
@@ -48,6 +59,42 @@ function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature
   return null;
 }
 
+function normalizeOpenAITextSignaturePhase(value: unknown): OpenAITextSignaturePhase | undefined {
+  return value === "commentary" || value === "final_answer" ? value : undefined;
+}
+
+function parseOpenAITextSignature(value: unknown): OpenAITextSignature | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return {};
+  }
+  try {
+    const candidate = JSON.parse(trimmed) as { phase?: unknown };
+    const phase = normalizeOpenAITextSignaturePhase(candidate.phase);
+    return phase ? { phase } : {};
+  } catch {
+    return {};
+  }
+}
+
+function buildResetOpenAITextSignature(params: {
+  messageIndex: number;
+  blockIndex: number;
+  phase: OpenAITextSignaturePhase;
+}): string {
+  return JSON.stringify({
+    v: 1,
+    id: `msg_reset_${params.messageIndex}_${params.blockIndex}`,
+    phase: params.phase,
+  });
+}
+
 function hasFollowingNonThinkingBlock(
   content: Extract<AgentMessage, { role: "assistant" }>["content"],
   index: number,
@@ -80,6 +127,148 @@ function splitOpenAIFunctionCallPairing(id: string): {
 
 function isOpenAIToolCallType(type: unknown): boolean {
   return type === "toolCall" || type === "toolUse" || type === "functionCall";
+}
+
+/**
+ * Historical OpenAI Responses/Codex turns should be replayed as plain transcript,
+ * not as resumable backend items. Before a fresh top-level run starts, strip the
+ * persisted OpenAI-specific replay anchors (response ids, reasoning signatures,
+ * and function_call item ids) while preserving call_id-based tool-result pairing.
+ *
+ * This keeps post-tool continuation state scoped to the live run that created it
+ * without destroying the higher-level session id used for WebSocket reuse and
+ * prompt caching.
+ */
+export function resetOpenAIReplayAnchors(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false;
+  const rewrittenMessages: AgentMessage[] = [];
+  let pendingRewrittenIds: Map<string, string> | null = null;
+
+  for (const [messageIndex, msg] of messages.entries()) {
+    if (!msg || typeof msg !== "object") {
+      pendingRewrittenIds = null;
+      rewrittenMessages.push(msg);
+      continue;
+    }
+
+    const role = (msg as { role?: unknown }).role;
+    if (role === "assistant") {
+      const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
+      if (!Array.isArray(assistantMsg.content)) {
+        pendingRewrittenIds = null;
+        rewrittenMessages.push(msg);
+        continue;
+      }
+
+      const localRewrittenIds = new Map<string, string>();
+      let assistantChanged = false;
+      const nextContent = assistantMsg.content.map((block, blockIndex) => {
+        if (!block || typeof block !== "object") {
+          return block;
+        }
+
+        let nextBlock = block;
+
+        const thinkingBlock = block as OpenAIThinkingBlock;
+        if (
+          thinkingBlock.type === "thinking" &&
+          parseOpenAIReasoningSignature(thinkingBlock.thinkingSignature)
+        ) {
+          assistantChanged = true;
+          const rest = { ...(thinkingBlock as unknown as Record<string, unknown>) };
+          delete rest.thinkingSignature;
+          nextBlock = rest as typeof block;
+        }
+
+        const textBlock = nextBlock as OpenAITextBlock;
+        if (
+          textBlock.type === "text" &&
+          typeof textBlock.textSignature === "string" &&
+          textBlock.textSignature.length > 0
+        ) {
+          assistantChanged = true;
+          const rest = { ...(textBlock as unknown as Record<string, unknown>) };
+          const parsedSignature = parseOpenAITextSignature(textBlock.textSignature);
+          if (parsedSignature?.phase) {
+            rest.textSignature = buildResetOpenAITextSignature({
+              messageIndex,
+              blockIndex,
+              phase: parsedSignature.phase,
+            });
+          } else {
+            delete rest.textSignature;
+          }
+          nextBlock = rest as typeof block;
+        }
+
+        const toolCallBlock = nextBlock as OpenAIToolCallBlock;
+        if (!isOpenAIToolCallType(toolCallBlock.type) || typeof toolCallBlock.id !== "string") {
+          return nextBlock;
+        }
+
+        const pairing = splitOpenAIFunctionCallPairing(toolCallBlock.id);
+        if (!pairing.itemId) {
+          return nextBlock;
+        }
+
+        assistantChanged = true;
+        localRewrittenIds.set(toolCallBlock.id, pairing.callId);
+        return {
+          ...(nextBlock as unknown as Record<string, unknown>),
+          id: pairing.callId,
+        } as typeof block;
+      });
+
+      pendingRewrittenIds = localRewrittenIds.size > 0 ? localRewrittenIds : null;
+      if (!assistantChanged) {
+        rewrittenMessages.push(msg);
+        continue;
+      }
+      changed = true;
+      rewrittenMessages.push({ ...assistantMsg, content: nextContent } as AgentMessage);
+      continue;
+    }
+
+    if (role === "toolResult" && pendingRewrittenIds && pendingRewrittenIds.size > 0) {
+      const toolResult = msg as Extract<AgentMessage, { role: "toolResult" }> & {
+        toolUseId?: unknown;
+      };
+      let toolResultChanged = false;
+      const updates: Record<string, string> = {};
+
+      if (typeof toolResult.toolCallId === "string") {
+        const nextToolCallId = pendingRewrittenIds.get(toolResult.toolCallId);
+        if (nextToolCallId && nextToolCallId !== toolResult.toolCallId) {
+          updates.toolCallId = nextToolCallId;
+          toolResultChanged = true;
+        }
+      }
+
+      if (typeof toolResult.toolUseId === "string") {
+        const nextToolUseId = pendingRewrittenIds.get(toolResult.toolUseId);
+        if (nextToolUseId && nextToolUseId !== toolResult.toolUseId) {
+          updates.toolUseId = nextToolUseId;
+          toolResultChanged = true;
+        }
+      }
+
+      if (!toolResultChanged) {
+        rewrittenMessages.push(msg);
+        continue;
+      }
+      changed = true;
+      rewrittenMessages.push({
+        ...toolResult,
+        ...updates,
+      } as AgentMessage);
+      continue;
+    }
+
+    pendingRewrittenIds = null;
+    rewrittenMessages.push(msg);
+  }
+
+  return changed ? rewrittenMessages : messages;
 }
 
 /**

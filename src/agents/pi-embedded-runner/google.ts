@@ -14,6 +14,7 @@ import {
   downgradeOpenAIReasoningBlocks,
   isCompactionFailureError,
   isGoogleModelApi,
+  resetOpenAIReplayAnchors,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
 } from "../pi-embedded-helpers.js";
@@ -577,7 +578,7 @@ export async function sanitizeSessionHistory(params: {
     : false;
   const sanitizedOpenAI = isOpenAIResponsesApi
     ? downgradeOpenAIFunctionCallReasoningPairs(
-        downgradeOpenAIReasoningBlocks(sanitizedCompactionUsage),
+        downgradeOpenAIReasoningBlocks(resetOpenAIReplayAnchors(sanitizedCompactionUsage)),
       )
     : sanitizedCompactionUsage;
 

@@ -7,7 +7,7 @@ import {
 import { sanitizeSessionHistory } from "./pi-embedded-runner/google.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 
-describe("sanitizeSessionHistory openai tool id preservation", () => {
+describe("sanitizeSessionHistory openai replay tool id reset", () => {
   const makeSessionManager = () =>
     makeInMemorySessionManager([
       makeModelSnapshotEntry({
@@ -49,9 +49,9 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
       expectedToolId: "call_123",
     },
     {
-      name: "keeps canonical call_id|fc_id pairings when replayable reasoning is present",
+      name: "also strips fc ids when replayable reasoning metadata is present on a prior turn",
       withReasoning: true,
-      expectedToolId: "call_123|fc_123",
+      expectedToolId: "call_123",
     },
   ])("$name", async ({ withReasoning, expectedToolId }) => {
     const result = await sanitizeSessionHistory({

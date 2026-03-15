@@ -98,12 +98,14 @@ external end-user instructions.
 
 **OpenAI / OpenAI Codex**
 
-- Image sanitization only.
+- Image sanitization.
+- Reset stored OpenAI replay anchors at fresh top-level turn boundaries:
+  - strip persisted reasoning signatures from historical `thinking` blocks,
+  - strip persisted `textSignature` response ids from historical assistant text blocks,
+  - downgrade historical `call_id|fc_id` tool ids to plain `call_id` while preserving tool-result pairing.
 - Drop orphaned reasoning signatures (standalone reasoning items without a following content block) for OpenAI Responses/Codex transcripts.
-- No tool call id sanitization.
-- No tool result pairing repair.
+- Tool result pairing repair and synthetic tool results still run globally when needed.
 - No turn validation or reordering.
-- No synthetic tool results.
 - No thought signature stripping.
 
 **Google (Generative AI / Gemini CLI / Antigravity)**
