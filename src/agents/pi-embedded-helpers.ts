@@ -50,7 +50,6 @@ export {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
   normalizeOpenAIReasoningSignatures,
-  resetOpenAIReplayAnchors,
 } from "./pi-embedded-helpers/openai.js";
 export {
   isEmptyAssistantMessageContent,
