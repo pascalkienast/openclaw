@@ -3,6 +3,7 @@ import {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
   isMessagingToolDuplicate,
+  normalizeOpenAIReasoningSignatures,
   normalizeTextForComparison,
   sanitizeToolCallId,
   sanitizeUserFacingText,
@@ -316,6 +317,50 @@ describe("downgradeOpenAIReasoningBlocks", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     const twice = downgradeOpenAIReasoningBlocks(once as any);
     expect(twice).toEqual(once);
+  });
+});
+
+describe("normalizeOpenAIReasoningSignatures", () => {
+  it("stringifies legacy object-form reasoning signatures", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal",
+            thinkingSignature: { id: "rs_obj", type: "reasoning", summary: [] },
+          },
+          { type: "toolCall", id: "call_1|fc_1", name: "read", arguments: {} },
+        ],
+      },
+    ];
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const output = normalizeOpenAIReasoningSignatures(input as any) as typeof input;
+    expect(output).not.toBe(input);
+    const signature = output[0]?.content?.[0] as { thinkingSignature?: unknown };
+    expect(signature.thinkingSignature).toBe(
+      JSON.stringify({ id: "rs_obj", type: "reasoning", summary: [] }),
+    );
+  });
+
+  it("keeps non-replayable object signatures untouched", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal",
+            thinkingSignature: { id: "xx", type: "not_reasoning" },
+          },
+        ],
+      },
+    ];
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    expect(normalizeOpenAIReasoningSignatures(input as any)).toBe(input);
   });
 });
 

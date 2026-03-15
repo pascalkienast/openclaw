@@ -141,6 +141,66 @@ function isOpenAIResponsesAssistantApi(value: unknown): boolean {
 }
 
 /**
+ * Preserve legacy object-form OpenAI reasoning signatures in stored history,
+ * but normalize them to JSON strings right before provider replay so both HTTP
+ * and WebSocket serializers can actually emit the paired reasoning input item.
+ */
+export function normalizeOpenAIReasoningSignatures(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false;
+  const rewritten = messages.map((msg) => {
+    if (
+      !msg ||
+      typeof msg !== "object" ||
+      msg.role !== "assistant" ||
+      !Array.isArray(msg.content)
+    ) {
+      return msg;
+    }
+
+    let assistantChanged = false;
+    const nextContent = msg.content.map((block) => {
+      if (!block || typeof block !== "object") {
+        return block;
+      }
+      const thinkingBlock = block as OpenAIThinkingBlock;
+      if (thinkingBlock.type !== "thinking") {
+        return block;
+      }
+      if (!thinkingBlock.thinkingSignature || typeof thinkingBlock.thinkingSignature === "string") {
+        return block;
+      }
+      if (!parseOpenAIReasoningSignature(thinkingBlock.thinkingSignature)) {
+        return block;
+      }
+
+      let normalizedSignature: string;
+      try {
+        normalizedSignature = JSON.stringify(thinkingBlock.thinkingSignature);
+      } catch {
+        return block;
+      }
+
+      assistantChanged = true;
+      const rest = { ...(thinkingBlock as unknown as Record<string, unknown>) };
+      rest.thinkingSignature = normalizedSignature;
+      return rest as unknown as typeof block;
+    });
+
+    if (!assistantChanged) {
+      return msg;
+    }
+
+    changed = true;
+    return {
+      ...msg,
+      content: nextContent,
+    } as AgentMessage;
+  });
+
+  return changed ? rewritten : messages;
+}
+
+/**
  * Historical OpenAI Responses/Codex turns should be replayed as plain transcript,
  * not as resumable backend items. Before a fresh top-level run starts, drop
  * historical OpenAI `thinking` blocks and strip the remaining provider-specific

@@ -51,7 +51,10 @@ import { ensureOpenClawModelsJson } from "../models-config.js";
 import { createConfiguredOllamaStreamFn } from "../ollama-stream.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import {
+  downgradeOpenAIFunctionCallReasoningPairs,
+  downgradeOpenAIReasoningBlocks,
   ensureSessionHeader,
+  normalizeOpenAIReasoningSignatures,
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../pi-embedded-helpers.js";
@@ -771,6 +774,31 @@ export async function compactEmbeddedPiSessionDirect(
             providerBaseUrl,
           }),
         );
+      }
+
+      if (model.api === "openai-responses" || model.api === "openai-codex-responses") {
+        const inner = session.agent.streamFn;
+        session.agent.streamFn = (activeModel, context, options) => {
+          const ctx = context as unknown as { messages?: unknown };
+          const messages = ctx?.messages;
+          if (!Array.isArray(messages)) {
+            return inner(activeModel, context, options);
+          }
+
+          const normalized = normalizeOpenAIReasoningSignatures(messages as AgentMessage[]);
+          const sanitized = downgradeOpenAIFunctionCallReasoningPairs(
+            downgradeOpenAIReasoningBlocks(normalized),
+          );
+          if (sanitized === messages) {
+            return inner(activeModel, context, options);
+          }
+
+          const nextContext = {
+            ...(context as unknown as Record<string, unknown>),
+            messages: sanitized,
+          } as unknown;
+          return inner(activeModel, nextContext as typeof context, options);
+        };
       }
 
       try {

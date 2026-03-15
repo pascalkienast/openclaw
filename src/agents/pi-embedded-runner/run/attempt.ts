@@ -61,6 +61,7 @@ import {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
   isCloudCodeAssistFormatError,
+  normalizeOpenAIReasoningSignatures,
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
@@ -1975,8 +1976,9 @@ export async function runEmbeddedAttempt(
           if (!Array.isArray(messages)) {
             return inner(model, context, options);
           }
+          const normalized = normalizeOpenAIReasoningSignatures(messages as AgentMessage[]);
           const sanitized = downgradeOpenAIFunctionCallReasoningPairs(
-            downgradeOpenAIReasoningBlocks(messages as AgentMessage[]),
+            downgradeOpenAIReasoningBlocks(normalized),
           );
           if (sanitized === messages) {
             return inner(model, context, options);
