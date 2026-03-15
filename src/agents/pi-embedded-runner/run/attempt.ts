@@ -1948,6 +1948,7 @@ export async function runEmbeddedAttempt(
         },
         params.thinkLevel,
         sessionAgentId,
+        { turnScopedSessionId: params.runId },
       );
 
       if (cacheTrace) {

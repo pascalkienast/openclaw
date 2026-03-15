@@ -1175,6 +1175,54 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("auto");
   });
 
+  it("scopes Codex backend sessions to the current run id", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "openai-codex",
+      "gpt-5.4",
+      undefined,
+      undefined,
+      undefined,
+      { turnScopedSessionId: "run-turn-123" },
+    );
+
+    const model = {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      id: "gpt-5.4",
+    } as Model<"openai-codex-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, { sessionId: "discord-session-abc" });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.transport).toBe("auto");
+    expect(calls[0]?.sessionId).toBe("run-turn-123");
+  });
+
+  it("does not override non-Codex session ids when run scoping is configured", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5", undefined, undefined, undefined, {
+      turnScopedSessionId: "run-turn-123",
+    });
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, { sessionId: "discord-session-abc" });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.transport).toBe("auto");
+    expect(calls[0]?.sessionId).toBe("discord-session-abc");
+    expect(calls[0]?.openaiWsWarmup).toBe(false);
+  });
+
   it("defaults OpenAI transport to auto (WebSocket-first)", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
