@@ -13,7 +13,7 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
   sanitizeSessionMessagesImages: vi.fn(async (msgs) => msgs),
 }));
 
-describe("sanitizeSessionHistory OpenAI replay anchor reset", () => {
+describe("sanitizeSessionHistory OpenAI full-context replay preservation", () => {
   async function sanitize(messages: AgentMessage[]) {
     const harness = await loadSanitizeSessionHistoryWithCleanMocks();
     return harness.sanitizeSessionHistory({
@@ -26,7 +26,7 @@ describe("sanitizeSessionHistory OpenAI replay anchor reset", () => {
     });
   }
 
-  it("strips historical responses replay anchors but preserves call_id pairing", async () => {
+  it("preserves stored OpenAI reasoning, text signatures, and function_call ids", async () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "assistant",
@@ -69,17 +69,19 @@ describe("sanitizeSessionHistory OpenAI replay anchor reset", () => {
         thinkingSignature?: string;
       }>;
     };
-    expect(assistant.content?.some((block) => block.type === "thinking")).toBe(false);
+    expect(assistant.content?.some((block) => block.type === "thinking")).toBe(true);
     expect(assistant.content?.find((block) => block.type === "text")?.textSignature).toBe(
-      JSON.stringify({ v: 1, id: "msg_reset_0_1", phase: "commentary" }),
+      JSON.stringify({ v: 1, id: "msg_123", phase: "commentary" }),
     );
-    expect(assistant.content?.find((block) => block.type === "toolCall")?.id).toBe("call_123");
+    expect(assistant.content?.find((block) => block.type === "toolCall")?.id).toBe(
+      "call_123|fc_123",
+    );
 
     const toolResult = result[1] as { toolCallId?: string };
-    expect(toolResult.toolCallId).toBe("call_123");
+    expect(toolResult.toolCallId).toBe("call_123|fc_123");
   });
 
-  it("rewrites legacy plain-string textSignature ids instead of deleting them", async () => {
+  it("preserves legacy plain-string textSignature ids in stored history", async () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "assistant",
@@ -108,46 +110,17 @@ describe("sanitizeSessionHistory OpenAI replay anchor reset", () => {
       {
         type: "text",
         text: "First block",
-        textSignature: JSON.stringify({ v: 1, id: "msg_reset_0_0" }),
+        textSignature: "msg_legacy_a",
       },
       {
         type: "text",
         text: "Second block",
-        textSignature: JSON.stringify({ v: 1, id: "msg_reset_0_1" }),
+        textSignature: "msg_legacy_b",
       },
     ]);
   });
 
-  it("preserves non-OpenAI thinking blocks for later cross-model conversion", async () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "assistant",
-        api: "anthropic-messages",
-        content: [
-          {
-            type: "thinking",
-            thinking: "foreign reasoning",
-          },
-          {
-            type: "text",
-            text: "Working on it.",
-          },
-        ],
-      }),
-    ];
-
-    const result = await sanitize(messages);
-
-    const assistant = result[0] as {
-      content?: Array<{ type?: string; thinking?: string; text?: string }>;
-    };
-    expect(assistant.content).toEqual([
-      { type: "thinking", thinking: "foreign reasoning" },
-      { type: "text", text: "Working on it." },
-    ]);
-  });
-
-  it("drops unsigned historical thinking blocks when resetting other replay anchors", async () => {
+  it("preserves historical OpenAI reasoning-only turns for full-context fallback", async () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "assistant",
@@ -156,11 +129,7 @@ describe("sanitizeSessionHistory OpenAI replay anchor reset", () => {
           {
             type: "thinking",
             thinking: "internal reasoning",
-          },
-          {
-            type: "text",
-            text: "Working on it.",
-            textSignature: JSON.stringify({ v: 1, id: "msg_123", phase: "commentary" }),
+            thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
           },
         ],
       }),
@@ -169,78 +138,14 @@ describe("sanitizeSessionHistory OpenAI replay anchor reset", () => {
     const result = await sanitize(messages);
 
     const assistant = result[0] as {
-      content?: Array<{ type?: string; text?: string; textSignature?: string }>;
+      content?: Array<{ type?: string; thinking?: string; thinkingSignature?: string }>;
     };
     expect(assistant.content).toEqual([
       {
-        type: "text",
-        text: "Working on it.",
-        textSignature: JSON.stringify({ v: 1, id: "msg_reset_0_1", phase: "commentary" }),
+        type: "thinking",
+        thinking: "internal reasoning",
+        thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
       },
     ]);
-  });
-
-  it("drops unsigned historical thinking-only turns", async () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "assistant",
-        api: "openai-responses",
-        content: [
-          {
-            type: "thinking",
-            thinking: "internal reasoning",
-          },
-        ],
-      }),
-    ];
-
-    const result = await sanitize(messages);
-
-    expect(result).toEqual([]);
-  });
-
-  it("leaves already-reset OpenAI replay ids untouched", async () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "assistant",
-        api: "openai-responses",
-        content: [
-          {
-            type: "text",
-            text: "Done.",
-          },
-          {
-            type: "toolCall",
-            id: "call_plain",
-            name: "read",
-            arguments: {},
-          },
-        ],
-      }),
-      castAgentMessage({
-        role: "toolResult",
-        toolCallId: "call_plain",
-        toolName: "read",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-      }),
-    ];
-
-    const result = await sanitize(messages);
-
-    const assistant = result[0] as {
-      content?: Array<{ type?: string; id?: string; text?: string }>;
-      usage?: unknown;
-    };
-    expect(assistant.content).toEqual(
-      messages[0]?.role === "assistant" ? messages[0].content : undefined,
-    );
-    expect(assistant.usage).toBeDefined();
-
-    const toolResult = result[1] as { toolCallId?: string; content?: unknown };
-    expect(toolResult.toolCallId).toBe("call_plain");
-    expect(toolResult.content).toEqual(
-      messages[1]?.role === "toolResult" ? messages[1].content : undefined,
-    );
   });
 });

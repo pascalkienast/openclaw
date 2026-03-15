@@ -99,12 +99,14 @@ external end-user instructions.
 **OpenAI / OpenAI Codex**
 
 - Image sanitization.
-- Reset stored OpenAI replay anchors at fresh top-level turn boundaries:
-  - drop historical `thinking` blocks entirely (including already-stripped reasoning blocks with no replay value),
-  - strip persisted `textSignature` response ids from historical assistant text blocks,
-  - downgrade historical `call_id|fc_id` tool ids to plain `call_id` while preserving tool-result pairing.
-- Drop orphaned reasoning signatures (standalone reasoning items without a following content block) for OpenAI Responses/Codex transcripts.
+- Preserve stored OpenAI Responses/Codex history intact for full-context replays:
+  - keep historical `thinking` / `reasoning` blocks,
+  - keep persisted assistant `textSignature` response ids,
+  - keep historical `call_id|fc_id` tool ids and tool-result pairing.
 - Tool result pairing repair and synthetic tool results still run globally when needed.
+- Replay sanitization happens only at send time:
+  - incremental WebSocket continuations use `previous_response_id` only for real tool-result resumes,
+  - full-context OpenAI replays may drop standalone reasoning items or strip `fc_*` ids only when the provider would reject them.
 - No turn validation or reordering.
 - No thought signature stripping.
 

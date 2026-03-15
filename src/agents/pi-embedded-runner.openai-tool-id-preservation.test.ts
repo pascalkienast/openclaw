@@ -7,7 +7,7 @@ import {
 import { sanitizeSessionHistory } from "./pi-embedded-runner/google.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 
-describe("sanitizeSessionHistory openai replay tool id reset", () => {
+describe("sanitizeSessionHistory openai replay tool id preservation", () => {
   const makeSessionManager = () =>
     makeInMemorySessionManager([
       makeModelSnapshotEntry({
@@ -44,16 +44,14 @@ describe("sanitizeSessionHistory openai replay tool id reset", () => {
 
   it.each([
     {
-      name: "strips fc ids when replayable reasoning metadata is missing",
+      name: "preserves fc ids when replayable reasoning metadata is missing",
       withReasoning: false,
-      expectedToolId: "call_123",
     },
     {
-      name: "also strips fc ids when replayable reasoning metadata is present on a prior turn",
+      name: "preserves fc ids when replayable reasoning metadata is present",
       withReasoning: true,
-      expectedToolId: "call_123",
     },
-  ])("$name", async ({ withReasoning, expectedToolId }) => {
+  ])("$name", async ({ withReasoning }) => {
     const result = await sanitizeSessionHistory({
       messages: makeMessages(withReasoning),
       modelApi: "openai-responses",
@@ -65,9 +63,9 @@ describe("sanitizeSessionHistory openai replay tool id reset", () => {
 
     const assistant = result[0] as { content?: Array<{ type?: string; id?: string }> };
     const toolCall = assistant.content?.find((block) => block.type === "toolCall");
-    expect(toolCall?.id).toBe(expectedToolId);
+    expect(toolCall?.id).toBe("call_123|fc_123");
 
     const toolResult = result[1] as { toolCallId?: string };
-    expect(toolResult.toolCallId).toBe(expectedToolId);
+    expect(toolResult.toolCallId).toBe("call_123|fc_123");
   });
 });

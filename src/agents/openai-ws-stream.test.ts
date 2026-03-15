@@ -320,7 +320,7 @@ function makeResponseObject(
   if (toolCallName) {
     output.push({
       type: "function_call",
-      id: "item_2",
+      id: "fc_2",
       call_id: "call_abc",
       name: toolCallName,
       arguments: '{"arg":"value"}',
@@ -592,7 +592,7 @@ describe("convertMessagesToInputItems", () => {
           thinkingSignature: JSON.stringify({
             type: "reasoning",
             id: "rs_test",
-            summary: [],
+            summary: [{ type: "summary_text", text: "brief" }],
           }),
         },
         { type: "text" as const, text: "Here is my answer." },
@@ -608,6 +608,40 @@ describe("convertMessagesToInputItems", () => {
       typeof convertMessagesToInputItems
     >[0]);
     expect(items.map((item) => item.type)).toEqual(["reasoning", "message"]);
+    expect(items[0]).toMatchObject({
+      type: "reasoning",
+      id: "rs_test",
+      summary: [{ type: "summary_text", text: "brief" }],
+    });
+  });
+
+  it("drops stale fc ids for cross-model OpenAI full-context replays", () => {
+    const msg = {
+      role: "assistant" as const,
+      content: [{ type: "toolCall" as const, id: "call_1|fc_1", name: "exec", arguments: {} }],
+      stopReason: "toolUse",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {},
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems(
+      [msg] as Parameters<typeof convertMessagesToInputItems>[0],
+      {
+        id: "gpt-5.4",
+        provider: "openai",
+        api: "openai-responses",
+        input: ["text"],
+      },
+    );
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      type: "function_call",
+      call_id: "call_1",
+      name: "exec",
+    });
+    expect(items[0]).not.toHaveProperty("id");
   });
 
   it("returns empty array for empty messages", () => {
@@ -646,7 +680,7 @@ describe("buildAssistantMessageFromResponse", () => {
     };
     expect(tc).toBeDefined();
     expect(tc.name).toBe("exec");
-    expect(tc.id).toBe("call_abc");
+    expect(tc.id).toBe("call_abc|fc_2");
     expect(tc.arguments).toEqual({ arg: "value" });
   });
 
@@ -654,6 +688,51 @@ describe("buildAssistantMessageFromResponse", () => {
     const response = makeResponseObject("resp_3", undefined, "exec");
     const msg = buildAssistantMessageFromResponse(response, modelInfo);
     expect(msg.stopReason).toBe("toolUse");
+  });
+
+  it("preserves reasoning blocks and function_call item ids for later full-context replay", () => {
+    const response: ResponseObject = {
+      id: "resp_reasoning",
+      object: "response",
+      created_at: Date.now(),
+      status: "completed",
+      model: "gpt-5.2",
+      output: [
+        {
+          type: "reasoning",
+          id: "rs_1",
+          summary: "brief reasoning summary",
+        },
+        {
+          type: "function_call",
+          id: "fc_1",
+          call_id: "call_1",
+          name: "exec",
+          arguments: '{"cmd":"ls"}',
+        },
+      ],
+      usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+    };
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo) as {
+      content: Array<{
+        type: string;
+        id?: string;
+        thinking?: string;
+        thinkingSignature?: string;
+      }>;
+    };
+
+    const reasoning = msg.content.find((block) => block.type === "thinking");
+    expect(reasoning?.thinking).toBe("brief reasoning summary");
+    expect(JSON.parse(reasoning?.thinkingSignature ?? "{}")).toMatchObject({
+      type: "reasoning",
+      id: "rs_1",
+      summary: "brief reasoning summary",
+    });
+
+    const toolCall = msg.content.find((block) => block.type === "toolCall");
+    expect(toolCall?.id).toBe("call_1|fc_1");
   });
 
   it("includes both text and tool calls when both present", () => {
@@ -958,6 +1037,74 @@ describe("createOpenAIWebSocketStreamFn", () => {
     } finally {
       MockManager.globalConnectShouldFail = false;
     }
+  });
+
+  it("drops previous_response_id on fresh user turns and replays full context", async () => {
+    const sessionId = "sess-fresh-turn";
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);
+
+    const ctx1 = {
+      systemPrompt: "You are helpful.",
+      messages: [userMsg("First question")] as Parameters<typeof convertMessagesToInputItems>[0],
+      tools: [],
+    };
+
+    const stream1 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      ctx1 as Parameters<typeof streamFn>[1],
+    );
+
+    const done1 = (async () => {
+      for await (const _ of await resolveStream(stream1)) {
+        // consume
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.setPreviousResponseId("resp_turn1");
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp_turn1", "First answer."),
+    });
+    await done1;
+
+    const ctx2 = {
+      systemPrompt: "You are helpful.",
+      messages: [
+        userMsg("First question"),
+        assistantMsg(["First answer."]),
+        userMsg("Fresh follow-up"),
+      ] as Parameters<typeof convertMessagesToInputItems>[0],
+      tools: [],
+    };
+
+    const stream2 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      ctx2 as Parameters<typeof streamFn>[1],
+    );
+
+    const done2 = (async () => {
+      for await (const _ of await resolveStream(stream2)) {
+        // consume
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp_turn2", "Second answer."),
+    });
+    await done2;
+
+    expect(manager.sentEvents).toHaveLength(2);
+    const sent2 = manager.sentEvents[1] as {
+      previous_response_id?: string;
+      input: Array<{ type: string; role?: string }>;
+    };
+    expect(sent2.previous_response_id).toBeUndefined();
+    expect((sent2.input ?? []).map((item) => item.type)).toEqual(["message", "message", "message"]);
+    expect((sent2.input ?? []).map((item) => item.role)).toEqual(["user", "assistant", "user"]);
   });
 
   it("tracks previous_response_id across turns (incremental send)", async () => {

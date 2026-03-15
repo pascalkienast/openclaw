@@ -53,11 +53,18 @@ describe("sanitizeSessionHistory e2e smoke", () => {
     expect(result).toEqual(mockMessages);
   });
 
-  it("downgrades openai reasoning blocks when the model snapshot changed", async () => {
+  it("preserves openai reasoning blocks when the model snapshot changed", async () => {
     const result = await sanitizeSnapshotChangedOpenAIReasoning({
       sanitizeSessionHistory,
     });
 
-    expect(result).toEqual([]);
+    const assistant = result[0] as { content?: unknown };
+    expect(assistant.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "reasoning",
+        thinkingSignature: { id: "rs_test", type: "reasoning" },
+      },
+    ]);
   });
 });

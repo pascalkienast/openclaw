@@ -23,14 +23,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type {
-  AssistantMessage,
-  Context,
-  Message,
-  StopReason,
-  TextContent,
-  ToolCall,
-} from "@mariozechner/pi-ai";
+import type { AssistantMessage, Context, Message, StopReason } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
 import {
   OpenAIWebSocketManager,
@@ -102,7 +95,12 @@ export function hasWsSession(sessionId: string): boolean {
 
 type AnyMessage = Message & { role: string; content: unknown };
 type AssistantMessageWithPhase = AssistantMessage & { phase?: OpenAIResponsesAssistantPhase };
-type ReplayModelInfo = { input?: ReadonlyArray<string> };
+type ReplayModelInfo = {
+  input?: ReadonlyArray<string>;
+  id?: string;
+  provider?: string;
+  api?: string;
+};
 
 function toNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") {
@@ -154,6 +152,20 @@ function parseAssistantTextSignature(
 
 function supportsImageInput(modelOverride?: ReplayModelInfo): boolean {
   return !Array.isArray(modelOverride?.input) || modelOverride.input.includes("image");
+}
+
+function extractReasoningText(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value.trim().length > 0 ? value : null;
+  }
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const texts = value
+    .filter((part): part is { text?: unknown } => Boolean(part) && typeof part === "object")
+    .map((part) => (typeof part.text === "string" ? part.text : ""))
+    .filter((part) => part.trim().length > 0);
+  return texts.length > 0 ? texts.join("\n\n") : null;
 }
 
 /** Convert pi-ai content (string | ContentPart[]) to plain text. */
@@ -240,23 +252,14 @@ function parseReasoningItem(value: unknown): Extract<InputItem, { type: "reasoni
   if (!value || typeof value !== "object") {
     return null;
   }
-  const record = value as {
-    type?: unknown;
-    content?: unknown;
-    encrypted_content?: unknown;
-    summary?: unknown;
-  };
+  const record = value as Record<string, unknown>;
   if (record.type !== "reasoning") {
     return null;
   }
   return {
+    ...record,
     type: "reasoning",
-    ...(typeof record.content === "string" ? { content: record.content } : {}),
-    ...(typeof record.encrypted_content === "string"
-      ? { encrypted_content: record.encrypted_content }
-      : {}),
-    ...(typeof record.summary === "string" ? { summary: record.summary } : {}),
-  };
+  } as Extract<InputItem, { type: "reasoning" }>;
 }
 
 function parseThinkingSignature(value: unknown): Extract<InputItem, { type: "reasoning" }> | null {
@@ -371,7 +374,20 @@ export function convertMessagesToInputItems(
           if (!callIdRaw || !toolName) {
             continue;
           }
-          const [callId, itemId] = callIdRaw.split("|", 2);
+          const [callId, itemIdRaw] = callIdRaw.split("|", 2);
+          if (!callId) {
+            continue;
+          }
+          let itemId: string | undefined = itemIdRaw;
+          const isDifferentModel =
+            typeof m.model === "string" &&
+            typeof modelOverride?.id === "string" &&
+            m.model !== modelOverride.id &&
+            m.provider === modelOverride.provider &&
+            m.api === modelOverride.api;
+          if (isDifferentModel && itemId?.startsWith("fc_")) {
+            itemId = undefined;
+          }
           items.push({
             type: "function_call",
             ...(itemId ? { id: itemId } : {}),
@@ -441,7 +457,7 @@ export function buildAssistantMessageFromResponse(
   response: ResponseObject,
   modelInfo: { api: string; provider: string; id: string },
 ): AssistantMessage {
-  const content: (TextContent | ToolCall)[] = [];
+  const content: AssistantMessage["content"] = [];
   let assistantPhase: OpenAIResponsesAssistantPhase | undefined;
 
   for (const item of response.output ?? []) {
@@ -462,14 +478,26 @@ export function buildAssistantMessageFromResponse(
           });
         }
       }
+    } else if (item.type === "reasoning") {
+      content.push({
+        type: "thinking",
+        thinking: extractReasoningText(item.summary) ?? extractReasoningText(item.content) ?? "",
+        thinkingSignature: JSON.stringify(item),
+      });
     } else if (item.type === "function_call") {
       const toolName = toNonEmptyString(item.name);
       if (!toolName) {
         continue;
       }
+      const callId = toNonEmptyString(item.call_id);
+      const itemId = toNonEmptyString(item.id);
       content.push({
         type: "toolCall",
-        id: toNonEmptyString(item.call_id) ?? `call_${randomUUID()}`,
+        id:
+          (callId && itemId ? `${callId}|${itemId}` : undefined) ??
+          callId ??
+          itemId ??
+          `call_${randomUUID()}`,
         name: toolName,
         arguments: (() => {
           try {
@@ -480,7 +508,6 @@ export function buildAssistantMessageFromResponse(
         })(),
       });
     }
-    // "reasoning" items are informational only; skip.
   }
 
   const hasToolCalls = content.some((c) => c.type === "toolCall");
@@ -719,24 +746,23 @@ export function createOpenAIWebSocketStreamFn(
       // ── 3. Compute incremental vs full input ─────────────────────────────
       const prevResponseId = session.manager.previousResponseId;
       let inputItems: InputItem[];
+      let continuationResponseId: string | null = null;
 
       if (prevResponseId && session.lastContextLength > 0) {
-        // Subsequent turn: only send new messages (tool results) since last call
         const newMessages = context.messages.slice(session.lastContextLength);
-        // Filter to only tool results — the assistant message is already in server context
-        const toolResults = newMessages.filter((m) => (m as AnyMessage).role === "toolResult");
-        if (toolResults.length === 0) {
-          // Shouldn't happen in a well-formed turn, but fall back to full context
-          log.debug(
-            `[ws-stream] session=${sessionId}: no new tool results found; sending full context`,
-          );
-          inputItems = buildFullInput(context, model);
-        } else {
+        if (isIncrementalToolContinuation(newMessages)) {
+          const toolResults = newMessages.filter((m) => (m as AnyMessage).role === "toolResult");
           inputItems = convertMessagesToInputItems(toolResults, model);
+          continuationResponseId = prevResponseId;
+          log.debug(
+            `[ws-stream] session=${sessionId}: incremental send (${inputItems.length} tool results) previous_response_id=${prevResponseId}`,
+          );
+        } else {
+          inputItems = buildFullInput(context, model);
+          log.debug(
+            `[ws-stream] session=${sessionId}: full context send (${inputItems.length} items); omit previous_response_id for fresh turn replay`,
+          );
         }
-        log.debug(
-          `[ws-stream] session=${sessionId}: incremental send (${inputItems.length} tool results) previous_response_id=${prevResponseId}`,
-        );
       } else {
         // First turn: send full context
         inputItems = buildFullInput(context, model);
@@ -794,7 +820,7 @@ export function createOpenAIWebSocketStreamFn(
         input: inputItems,
         instructions: context.systemPrompt ?? undefined,
         tools: tools.length > 0 ? tools : undefined,
-        ...(prevResponseId ? { previous_response_id: prevResponseId } : {}),
+        ...(continuationResponseId ? { previous_response_id: continuationResponseId } : {}),
         ...extraParams,
       };
       const nextPayload = options?.onPayload?.(payload, model);
@@ -928,6 +954,27 @@ export function createOpenAIWebSocketStreamFn(
 /** Build full input items from context (system prompt is passed via `instructions` field). */
 function buildFullInput(context: Context, model: ReplayModelInfo): InputItem[] {
   return convertMessagesToInputItems(context.messages, model);
+}
+
+function isIncrementalToolContinuation(messages: Message[]): boolean {
+  let sawToolResult = false;
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      return false;
+    }
+    const role = (msg as AnyMessage).role;
+    if (role === "assistant") {
+      continue;
+    }
+    if (role === "toolResult") {
+      sawToolResult = true;
+      continue;
+    }
+    return false;
+  }
+
+  return sawToolResult;
 }
 
 /**

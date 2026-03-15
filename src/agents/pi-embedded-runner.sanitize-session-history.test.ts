@@ -541,7 +541,7 @@ describe("sanitizeSessionHistory", () => {
     expect(freshAssistant?.usage).toBeDefined();
   });
 
-  it("drops reasoning-only assistant messages for openai-responses", async () => {
+  it("preserves reasoning-only assistant messages for openai-responses full-context replay", async () => {
     setNonGoogleModelApi();
 
     const messages: AgentMessage[] = [
@@ -566,7 +566,15 @@ describe("sanitizeSessionHistory", () => {
       sessionId: TEST_SESSION_ID,
     });
 
-    expect(result).toEqual([messages[0]]);
+    expect(result).toHaveLength(2);
+    const assistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "reasoning",
+        thinkingSignature: "sig",
+      },
+    ]);
   });
 
   it("synthesizes missing tool results for openai-responses after repair", async () => {
@@ -644,7 +652,7 @@ describe("sanitizeSessionHistory", () => {
     expect(result).toEqual([]);
   });
 
-  it("strips orphaned openai reasoning replay anchors even when the model has not changed", async () => {
+  it("preserves openai reasoning replay anchors even when the model has not changed", async () => {
     const sessionEntries = [
       makeModelSnapshotEntry({
         provider: "openai",
@@ -662,15 +670,23 @@ describe("sanitizeSessionHistory", () => {
       sessionManager,
     });
 
-    expect(result).toEqual([]);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual(messages[0]?.role === "assistant" ? messages[0].content : []);
   });
 
-  it("strips orphaned openai reasoning replay anchors when the model changes too", async () => {
+  it("preserves openai reasoning replay anchors when the model changes too", async () => {
     const result = await sanitizeSnapshotChangedOpenAIReasoning({
       sanitizeSessionHistory,
     });
 
-    expect(result).toEqual([]);
+    const assistant = result[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "reasoning",
+        thinkingSignature: { id: "rs_test", type: "reasoning" },
+      },
+    ]);
   });
 
   it("drops orphaned toolResult entries when switching from openai history to anthropic", async () => {
