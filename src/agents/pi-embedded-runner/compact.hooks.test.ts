@@ -289,7 +289,10 @@ vi.mock("../../utils/message-channel.js", () => ({
 }));
 
 vi.mock("../pi-embedded-helpers.js", () => ({
+  downgradeOpenAIFunctionCallReasoningPairs: vi.fn((m: unknown[]) => m),
+  downgradeOpenAIReasoningBlocks: vi.fn((m: unknown[]) => m),
   ensureSessionHeader: vi.fn(async () => {}),
+  normalizeOpenAIReasoningSignatures: vi.fn((m: unknown[]) => m),
   validateAnthropicTurns: vi.fn((m: unknown[]) => m),
   validateGeminiTurns: vi.fn((m: unknown[]) => m),
 }));
@@ -307,6 +310,7 @@ vi.mock("./sandbox-info.js", () => ({
 vi.mock("./model.js", () => ({
   buildModelAliasLines: vi.fn(() => []),
   resolveModel: resolveModelMock,
+  resolveModelAsync: vi.fn(async () => resolveModelMock()),
 }));
 
 vi.mock("./session-manager-cache.js", () => ({
